@@ -5,6 +5,13 @@ import random
 from PIL import ImageTk, Image
 from tkinter import ttk
 
+import os
+import ftplib
+import ntpath
+from ftplib import FTP
+from pathlib import Path
+from tkinter import filedialog
+
 SERVER = None
 PORT = None
 IP_ADDRESS = None
@@ -16,6 +23,11 @@ listBox = None
 textArea = None
 labelChat = None
 textmsg = None
+
+sendingFile = None
+downloadingFile = None
+fileToDownload = None
+filePathLabel = None
 
 
 def connectToServer():
@@ -53,7 +65,7 @@ def disconnectWithClient():
 
 
 def openChatWindow():
-    global name, listBox, textArea, labelChat, textmsg
+    global name, listBox, textArea, labelChat, textmsg, filePathLabel
 
     root = Tk()
     root.title("Chat Window")
@@ -101,13 +113,13 @@ def openChatWindow():
     scrollbar2.place(relheight=1, relx=1)
     scrollbar2.config(command=textArea.yview)
 
-    attachButton = Button(root, text="ATTACH & SEND", bd=1, font=('Calibri', 10))
+    attachButton = Button(root, text="ATTACH & SEND", bd=1, font=('Calibri', 10), command=browseFiles)
     attachButton.place(x=10, y=305)
 
     textmsg = Entry(root, width=43, font=('Calibri', 10))
     textmsg.place(x=110, y=306)
 
-    sendButton = Button(root, text="SEND", bd=1, font=('Calibri', 10))
+    sendButton = Button(root, text="SEND", bd=1, font=('Calibri', 10), command=sendMsg)
     sendButton.place(x=450, y=305)
     
     filePathLabel = Label(root, text='', fg='blue', font=('Calibri', 10))
@@ -117,21 +129,131 @@ def openChatWindow():
     root.mainloop()
 
 
+
+def getFileSize(fileName):
+    with open(fileName, 'rb') as File:
+        chunk = File.read()
+        return len(chunk)
+
+
+
+def browseFiles():
+    global sendingFile, textArea, filePathLabel
+
+    try:
+        fileName = filedialog.askopenfilename()
+        filePathLabel.configure(text=fileName)
+        userName = "abcde"
+        password = "abcde"
+        hostName = "127.0.0.1"
+
+        ftpSERVER = ftplib.FTP(hostName, userName, password)
+        ftpSERVER.encoding = 'utf-8'
+        ftpSERVER.cwd('shared_files')
+        fName = ntpath.basename(fileName)
+
+        with open (fileName, 'rb') as File:
+            ftpSERVER.storbinary(f'STOR {fName}', File)
+        
+        ftpSERVER.dir()
+        ftpSERVER.quit()
+
+        message = "send "+fName
+
+        if message[:4] == 'send':
+            print("PLEASE WAIT...\n")
+            textArea.insert(END, '\nPLEASE WAIT...\n')
+            textArea.see('end')
+            sendingFile = message[5:]
+            fileSize = getFileSize('shared_files/'+sendingFile)
+            finalMsg = message+' '+str(fileSize)
+            SERVER.send(finalMsg.encode())
+            textArea.insert(END, 'in process...')
+
+
+    except FileNotFoundError:
+        print("CANCEL BUTTON PRESSED")
+
+
+
+
+def sendMsg():
+    global SERVER, textArea, textmsg, fileToDownload
+
+    msgToSend = textmsg.get()
+    SERVER.send(msgToSend.encode('ascii'))
+    textArea.insert(END, '\nYou: '+msgToSend)
+    textArea.see('end')
+    textmsg.delete(0, 'end')
+
+    if msgToSend == 'y' or msgToSend == 'Y':
+        textArea.insert(END, '\nPlease wait, the file is downloading...')
+        textArea.see('end')
+        userName = "abcde"
+        password = "abcde"
+        hostName = "127.0.0.1"
+        home = str(Path.home())
+
+        downloadPath = home+'\Downloads'
+
+        ftpSERVER = ftplib.FTP(hostName, userName, password)
+        ftpSERVER.encoding = 'utf-8'
+        ftpSERVER.cwd('shared_files')
+        fName = fileToDownload
+        localFileName = os.path.join(str((downloadPath, fName)))
+
+        file = open(localFileName,'wb')
+        ftpSERVER.retrbinary("RETR "+fName,file.write)
+        ftpSERVER.dir()
+        file.close()
+        ftpSERVER.quit()
+        print("file downloaded to "+downloadPath)
+        textArea.insert(END, '\nFile downloaded to '+downloadPath)
+        textArea.see('end')
+
+
+
+
+
+
 def recivedMsg():
     global SERVER
     global name
     global textArea
     global bufferSize
     global listBox
+    global labelChat
+    global downloadingFile
 
     while True:
         chunk = SERVER.recv(bufferSize)
         try:
             if "tiul" in chunk.decode() and "1.0," not in chunk.decode():
                 letterList = chunk.decode().split(',')
-                listBox.insert(letterList[0], letterList[0]+': '+letterList[1]+': '+letterList[3]+' '+letterList[5])
-                print(letterList[0], letterList[0]+': '+letterList[1]+': '+letterList[3]+' '+letterList[5])
+                listBox.insert(letterList[0], letterList[0]+': '+letterList[1]+': '+letterList[3])
+                print(letterList[0], letterList[0]+': '+letterList[1]+': '+letterList[3])
+
+            elif chunk.decode() == '!access granted!':
+                labelChat.configure(text='')
+                textArea.insert(END, '\n'+chunk.decode('ascii'))
+                textArea.see('end')
+
+            elif chunk.decode() == '!access declined!':
+                labelChat.configure(text='')
+                textArea.insert(END, '\n'+chunk.decode('ascii'))
+                textArea.see('end')
+
+            elif 'download?' in chunk.decode():
+                downloadingFile = chunk.decode('ascii').split(' ')[4].strip()
+                bufferSize = int(chunk.decode('ascii').split(' ')[8])
+                textArea.insert(END, '\n'+chunk.decode('ascii'))
+                textArea.see('end')
+
+            elif 'Download:' in chunk.decode():
+                getFileName = chunk.decode().split(':')
+                fileToDownload = getFileName[1]
                 
+
             else:
                 textArea.insert(END, '\n'+chunk.decode('ascii'))
                 textArea.see('end')
