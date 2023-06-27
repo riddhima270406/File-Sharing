@@ -2,11 +2,17 @@ import socket
 from  threading import Thread
 import time
 
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
+
+
 SERVER = None
 PORT = None
 IP_ADDRESS = None
 
 bufferSize = 4096
+
 
 CLIENTS = {}
 
@@ -24,19 +30,106 @@ def handleClient(client, client_name):
             message = chunk.decode().strip().lower()
             if message:
                 handleMsgs(client, message, client_name)
+            else:
+                removeClient(client_name)
 
         except:
             pass
 
 
+def removeClient(client_name):
+    try:
+        if  client_name in CLIENTS:
+            del CLIENTS[client_name]
+    except KeyError:
+        pass
+
+
+def handleSendFile(client_name, file_name, file_size):
+    global CLIENTS
+    
+    CLIENTS[client_name]["fileName"] = file_name
+    CLIENTS[client_name]["fileSize"] = file_size
+
+    otherClientName = CLIENTS[client_name]['connectedWith']
+    otherClientSocket = CLIENTS[otherClientName]['client']
+
+    msg = f'\n{client_name} want to send {file_name} file with size {file_size} bytes. Do you want to download? y/n'
+    otherClientSocket.send(msg.encode())
+
+    time.sleep(1)
+
+    msg2 = f'Download: {file_name}'
+    otherClientSocket.send(msg2.encode())
+
+
+def grantAccess(client_name):
+    global CLIENTS
+
+    otherClientName = CLIENTS[client_name]['connectedWith']
+    otherClientSocket = CLIENTS[otherClientName]['client']
+
+    msg = '!access granted!'
+    otherClientSocket.send(msg.encode())
+
+
+def declineAccess(client_name):
+    global CLIENTS
+
+    otherClientName = CLIENTS[client_name]['connectedWith']
+    otherClientSocket = CLIENTS[otherClientName]['client']
+
+    msg = '!access declined!'
+    otherClientSocket.send(msg.encode())
+
+
+def sendTextMsg(client_name, message):
+    global CLIENTS
+
+    otherClientName = CLIENTS[client_name]['connectedWith']
+    otherClientSocket = CLIENTS[otherClientName]['client']
+
+    msg = client_name+": "+ message
+    otherClientSocket.send(msg.encode())
+
+
+
+def handleErrorMesssage(client):
+    msg = '''
+    You need to connect with one of the client first before sending any message.
+    Click on Refresh to see all available users.
+    '''
+    client.send(msg.encode())
+
+
 def handleMsgs(client, message, client_name):
     if message == "show list":
         handleShowlist(client)
+
     elif message[:7] == "connect":
         connectClient(message, client, client_name)
+
     elif message[:10] == "disconnect":
         disconnectClient(message, client, client_name)
 
+    elif message[:4] == 'send':
+        file_name = message.split(' ')[1]
+        file_size = int(message.split(' ')[2])
+        handleSendFile(client_name, file_name, file_size)
+        print(client_name, file_name, file_size)
+    
+    elif message == 'y' or message == 'Y':
+        grantAccess(client_name)
+
+    elif message == 'n' or message == "N":
+        declineAccess(client_name)
+
+    else:
+        connected = CLIENTS[client_name]['connectedWith']
+        if connected:
+            sendTextMsg(client_name, message)
+        else:
+            handleErrorMesssage(client)
 
 def handleShowlist(client):
     global CLIENTS
@@ -134,5 +227,20 @@ def setup():
     acceptConnections()
 
 
+def ftp():
+    global IP_ADDRESS
+    authorizer = DummyAuthorizer()
+    authorizer.add_user("abcde", "abcde", ".", perm="elradfmw")
+
+    handler = FTPHandler
+    handler.authorizer = authorizer
+
+    ftp_server = FTPServer((IP_ADDRESS, 21), handler)
+    ftp_server.serve_forever()
+
+
 thread1 = Thread(target = setup)
 thread1.start()
+
+thread2 = Thread(target = ftp)
+thread2.start()
